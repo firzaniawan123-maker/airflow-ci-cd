@@ -1,0 +1,27 @@
+name: Deploy Airflow to WSL
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    env:
+      AIRFLOW_UID: 50000
+
+    steps:
+      - name: Pull latest code
+        run: |
+          cd ~/belajar-ci-cd/airflow-ci-cd
+          git pull origin main
+
+      - name: Build Airflow image
+        run: |
+          cd ~/belajar-ci-cd/airflow-ci-cd
+          docker compose build airflow-scheduler
+
+      - name: Restart Docker Compose
+        run: |
+          cd ~/belajar-ci-cd/airflow-ci-cd
+          docker compose up -d --no-build 

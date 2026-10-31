@@ -1,0 +1,107 @@
+# =============================================================================
+# Pipeline ELT berbasis konfigurasi: MySQL -> SeaweedFS (CSV) -> PostgreSQL (staging)
+#
+# DAG `mysql_to_dwh_scalable` membaca file ini saat parse dan membuat satu
+# TaskGroup per tabel (extract -> transform -> upload -> DQ -> load -> DQ).
+#
+# Cara menambah tabel baru:
+#   1. tambahkan di bawah `tables:` beserta primary key-nya
+#   2. simpan file ini (Airflow mem-parse ulang DAG secara otomatis)
+#   3. trigger DAG
+#
+# Daftar tabel di bawah mengikuti initdb/01_schema.sql. Semua yang diatur di
+# `defaults` dapat dioverride per tabel (key nested di-deep-merge).
+# =============================================================================
+
+version: 1
+
+defaults:
+  # --- Sumber data (MySQL) ------------------------------------------------------
+  source:
+    # Connection dibuat otomatis docker-compose dari variabel AIRFLOW_CONN_*.
+    # Jika Anda memakai connection ID dari testing_dag_customer.py,
+    # ubah di sini menjadi: my_mysql_conn / seaweed_s3 / my_postgres_conn
+    conn_id: mysql_source
+    database: fintech_payment_oltp
+
+  # --- Penyimpanan raw (S3 API SeaweedFS) --------------------------------------
+  storage:
+    conn_id: s3_raw
+    bucket: raw-zone
+    prefix: raw
+
+  # --- Warehouse data (PostgreSQL) ---------------------------------------------
+  target:
+    conn_id: warehouse_pg
+    schema: staging
+    # nama tabel akhir = <table_prefix><sumber tabel>, mis. staging.stg_customers
+    table_prefix: stg_
+
+  # Folder di worker untuk menyimpan file CSV antara.
+  local_dir: /tmp/airflow_data
+
+  # --- Aturan pembersihan data (perilaku sama dengan testing_dag_customer.py) --
+  transform:
+    drop_duplicates: true          # buang baris yang duplikat penuh
+    trim_strings: true             # buang spasi di awal/akhir string
+    null_text: "unknown"           # teks null -> "unknown"
+    null_number: 0                 # angka null -> 0
+    # primary key tidak pernah diisi: PK null harus membuat task DQ gagal
+
+  # --- Threshold Data Quality ---------------------------------------------------
+  dq:
+    max_row_loss_pct: 1.0          # toleransi kehilangan baris source vs staging (%)
+    freshness_minutes: 60          # usia maksimum loaded_at setelah load
+
+tables:
+  - name: customers
+    primary_key: customer_id
+
+  - name: merchants
+    primary_key: merchant_id
+
+  - name: payment_methods
+    primary_key: payment_method_id
+
+  - name: payment_transactions
+    primary_key: transaction_id
+
+  - name: payment_transaction_events
+    primary_key: event_id
+
+  - name: refunds
+    primary_key: refund_id
+
+  - name: chargebacks
+    primary_key: chargeback_id
+  
+  - name: settlement_providers
+    primary_key: provider_id
+  
+  - name: settlement_batches
+    primary_key: settlement_batch_id
+
+  - name: settlement_transactions
+    primary_key: settlement_transaction_id
+
+  - name: settlement_adjustments
+    primary_key: adjustment_id
+  
+
+
+# -----------------------------------------------------------------------------
+# Contoh override per tabel
+# -----------------------------------------------------------------------------
+#  - name: payment_transactions
+#    primary_key: transaction_id
+#    enabled: false                 # lewati tabel ini sementara
+#    target_table: stg_payments     # nama tujuan kustom
+#    columns:                       # extract hanya kolom ini
+#      - transaction_id
+#      - customer_id
+#      - gross_amount
+#      - transaction_status
+#      - created_at
+#    dq:
+#      max_row_loss_pct: 0.5
+#      freshness_minutes: 15
